@@ -57,12 +57,19 @@ program
   .option('-p, --port <port>', 'Development server port', '3000')
   .option('--mcp-port <port>', 'MCP server port', '3684')
   .option('-s, --script <script>', 'Package.json script to run (e.g. dev, build-start)', 'dev')
+  .option('--server-command <command>', 'Custom server command (overrides --script)')
   .option('--profile-dir <dir>', 'Chrome profile directory', join(tmpdir(), 'dev3000-chrome-profile'))
   .option('--debug', 'Enable debug logging to console')
   .action(async (options) => {
-    // Convert script option to full command
-    const packageManager = detectPackageManager();
-    const serverCommand = `${packageManager} run ${options.script}`;
+    // Use custom server command if provided, otherwise use script
+    let serverCommand: string;
+    if (options.serverCommand) {
+      serverCommand = options.serverCommand;
+    } else {
+      // Convert script option to full command
+      const packageManager = detectPackageManager();
+      serverCommand = `${packageManager} run ${options.script}`;
+    }
     
     try {
       // Create persistent log file and setup symlink
