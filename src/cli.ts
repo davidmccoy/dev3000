@@ -59,6 +59,8 @@ program
   .option('-s, --script <script>', 'Package.json script to run (e.g. dev, build-start)', 'dev')
   .option('--server-command <command>', 'Custom server command (overrides --script)')
   .option('--profile-dir <dir>', 'Chrome profile directory', join(tmpdir(), 'dev3000-chrome-profile'))
+  .option('--framework <framework>', 'Framework for error detection (rails, nextjs, django, express, auto)', 'auto')
+  .option('--process-manager <manager>', 'Process manager for output parsing (foreman, docker-compose, pm2, standard, auto)', 'auto')
   .option('--debug', 'Enable debug logging to console')
   .action(async (options) => {
     // Use custom server command if provided, otherwise use script

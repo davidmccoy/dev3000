@@ -53,10 +53,16 @@ Or use the MCP server at `http://localhost:3684/api/mcp/mcp` for advanced queryi
 ```bash
 dev3000 [options]
 
-  -p, --port <port>         Your app's port (default: 3000)
-  --mcp-port <port>         MCP server port (default: 3684)
-  -s, --script <script>     Package.json script to run (default: dev)
-  --profile-dir <dir>       Chrome profile directory (persists cookies/login state)
+  -p, --port <port>             Your app's port (default: 3000)
+  --mcp-port <port>             MCP server port (default: 3684)
+  -s, --script <script>         Package.json script to run (default: dev)
+  --server-command <command>    Custom server command (overrides --script)
+  --profile-dir <dir>           Chrome profile directory (persists cookies/login state)
+  --framework <framework>       Framework for error detection (default: auto)
+                                Options: rails, nextjs, django, express, auto
+  --process-manager <manager>   Process manager for output parsing (default: auto)
+                                Options: foreman, docker-compose, pm2, standard, auto
+  --debug                       Enable debug logging to console
 ```
 
 Examples:
@@ -67,6 +73,15 @@ dev3000 --port 5173
 
 # Persistent login state
 dev3000 --profile-dir ./chrome-profile
+
+# Rails app with Foreman (auto-detected)
+dev3000 --server-command "bin/dev"
+
+# Node.js app using Foreman
+dev3000 --server-command "foreman start" --framework express
+
+# Rails app using Docker Compose
+dev3000 --server-command "docker-compose up" --framework rails --process-manager docker-compose
 ```
 
 ---

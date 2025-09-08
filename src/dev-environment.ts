@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import chalk from 'chalk';
 import ora from 'ora';
 import { CDPMonitor } from './cdp-monitor.js';
-import { OutputParserFactory, OutputParser, LogEntry } from './services/output-parser.js';
+import { OutputProcessorFactory, OutputProcessor, LogEntry, ProcessManager, Framework } from './services/parsers/index.js';
 
 interface DevEnvironmentOptions {
   port: string;
@@ -14,6 +14,8 @@ interface DevEnvironmentOptions {
   serverCommand: string;
   profileDir: string;
   logFile: string;
+  framework?: Framework | string;
+  processManager?: ProcessManager | string;
   debug?: boolean;
 }
 
@@ -61,27 +63,27 @@ export function createPersistentLogFile(): string {
     }
     return createLogFileInDir(fallbackDir);
   }
-  
+
   return createLogFileInDir(logBaseDir);
 }
 
 function createLogFileInDir(baseDir: string): string {
   // Get current working directory name
   const cwdName = basename(process.cwd()).replace(/[^a-zA-Z0-9-_]/g, '_');
-  
+
   // Create timestamp
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  
+
   // Create log file path
   const logFileName = `dev3000-${cwdName}-${timestamp}.log`;
   const logFilePath = join(baseDir, logFileName);
-  
+
   // Prune old logs for this project (keep only 10 most recent)
   pruneOldLogs(baseDir, cwdName);
-  
+
   // Create the log file
   writeFileSync(logFilePath, '');
-  
+
   // Create or update symlink to /tmp/dev3000.log
   const symlinkPath = '/tmp/dev3000.log';
   try {
@@ -92,7 +94,7 @@ function createLogFileInDir(baseDir: string): string {
   } catch (error) {
     console.warn(chalk.yellow(`⚠️ Could not create symlink ${symlinkPath}: ${error}`));
   }
-  
+
   return logFilePath;
 }
 
@@ -107,7 +109,7 @@ function pruneOldLogs(baseDir: string, cwdName: string): void {
         mtime: statSync(join(baseDir, file)).mtime
       }))
       .sort((a, b) => b.mtime.getTime() - a.mtime.getTime()); // Most recent first
-    
+
     // Keep only the 10 most recent, delete the rest
     if (files.length >= 10) {
       const filesToDelete = files.slice(9); // Keep first 9, delete the rest
@@ -129,7 +131,7 @@ export class DevEnvironment {
   private mcpServerProcess: ChildProcess | null = null;
   private cdpMonitor: CDPMonitor | null = null;
   private logger: Logger;
-  private outputParser: OutputParser;
+  private outputProcessor: OutputProcessor;
   private options: DevEnvironmentOptions;
   private screenshotDir: string;
   private mcpPublicDir: string;
@@ -141,33 +143,37 @@ export class DevEnvironment {
   constructor(options: DevEnvironmentOptions) {
     this.options = options;
     this.logger = new Logger(options.logFile);
-    this.outputParser = OutputParserFactory.create(options.serverCommand);
-    
+    this.outputProcessor = OutputProcessorFactory.create(
+      options.serverCommand,
+      options.processManager || 'auto',
+      options.framework || 'auto'
+    );
+
     // Set up MCP server public directory for web-accessible screenshots
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = dirname(dirname(currentFile));
-    
+
     // Always use MCP server's public directory for screenshots to ensure they're web-accessible
     // and avoid permission issues with /var/log paths
     this.screenshotDir = join(packageRoot, 'mcp-server', 'public', 'screenshots');
     this.pidFile = join(tmpdir(), 'dev3000.pid');
     this.mcpPublicDir = join(packageRoot, 'mcp-server', 'public', 'screenshots');
-    
+
     // Read version from package.json for startup message
     this.version = '0.0.0';
     try {
       const packageJsonPath = join(packageRoot, 'package.json');
       const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
       this.version = packageJson.version;
-      
+
       // Use git to detect if we're in the dev3000 source repository
       try {
         const { execSync } = require('child_process');
-        const gitRemote = execSync('git remote get-url origin 2>/dev/null', { 
-          cwd: packageRoot, 
-          encoding: 'utf8' 
+        const gitRemote = execSync('git remote get-url origin 2>/dev/null', {
+          cwd: packageRoot,
+          encoding: 'utf8'
         }).trim();
-        
+
         if (gitRemote.includes('vercel-labs/dev3000') && !this.version.includes('canary')) {
           this.version += '-local';
         }
@@ -177,10 +183,10 @@ export class DevEnvironment {
     } catch (error) {
       // Use fallback version
     }
-    
+
     // Initialize spinner for clean output management
     this.spinner = ora({ text: 'Initializing...', spinner: 'dots' });
-    
+
     // Ensure directories exist
     if (!existsSync(this.screenshotDir)) {
       mkdirSync(this.screenshotDir, { recursive: true });
@@ -193,7 +199,7 @@ export class DevEnvironment {
 
   private async checkPortsAvailable() {
     const ports = [this.options.port, this.options.mcpPort];
-    
+
     for (const port of ports) {
       try {
         const result = await new Promise<string>((resolve) => {
@@ -202,10 +208,10 @@ export class DevEnvironment {
           proc.stdout?.on('data', (data) => output += data.toString());
           proc.on('exit', () => resolve(output.trim()));
         });
-        
+
         if (result) {
           result.split('\n').filter(line => line.trim());
-          
+
           // Stop spinner and show error
           if (this.spinner && this.spinner.isSpinning) {
             this.spinner.fail(`Port ${port} is already in use`);
@@ -225,13 +231,13 @@ export class DevEnvironment {
   async start() {
     // Show startup message first
     console.log(chalk.blue(`Starting dev3000 (v${this.version})`));
-    
+
     // Start spinner
     this.spinner.start('Checking ports...');
-    
+
     // Check if ports are available first
     await this.checkPortsAvailable();
-    
+
     this.spinner.text = 'Setting up environment...';
     // Write our process group ID to PID file for cleanup
     writeFileSync(this.pidFile, process.pid.toString());
@@ -260,7 +266,7 @@ export class DevEnvironment {
 
     // Complete startup
     this.spinner.succeed('Development environment ready!');
-    
+
     console.log(chalk.blue(`Logs: ${this.options.logFile}`));
     console.log(chalk.blue(`Logs symlink: /tmp/dev3000.log`));
     console.log(chalk.yellow('☝️ Give this to an AI to auto debug and fix your app\n'));
@@ -272,7 +278,7 @@ export class DevEnvironment {
 
   private async startServer() {
     const [command, ...args] = this.options.serverCommand.split(' ');
-    
+
     this.serverProcess = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: true,
@@ -282,8 +288,8 @@ export class DevEnvironment {
     // Log server output (to file only, reduce stdout noise)
     this.serverProcess.stdout?.on('data', (data) => {
       const text = data.toString();
-      const entries = this.outputParser.parse(text, false);
-      
+      const entries = this.outputProcessor.process(text, false);
+
       entries.forEach((entry: LogEntry) => {
         this.logger.log('server', entry.formatted);
       });
@@ -291,11 +297,11 @@ export class DevEnvironment {
 
     this.serverProcess.stderr?.on('data', (data) => {
       const text = data.toString();
-      const entries = this.outputParser.parse(text, true);
-      
+      const entries = this.outputProcessor.process(text, true);
+
       entries.forEach((entry: LogEntry) => {
         this.logger.log('server', entry.formatted);
-        
+
         // Show critical errors to console (parser determines what's critical)
         if (entry.isCritical && entry.rawMessage) {
           console.error(chalk.red('[CRITICAL ERROR]'), entry.rawMessage);
@@ -305,18 +311,18 @@ export class DevEnvironment {
 
     this.serverProcess.on('exit', (code) => {
       if (this.isShuttingDown) return; // Don't handle exits during shutdown
-      
+
       if (code !== 0 && code !== null) {
         this.debugLog(`Server process exited with code ${code}`);
         this.logger.log('server', `Server process exited with code ${code}`);
-        
+
         // Only shutdown for truly fatal exit codes, not build failures or restarts
         // Common exit codes that indicate temporary issues, not fatal errors:
         // - Code 1: Generic build failure or restart
         // - Code 130: Ctrl+C (SIGINT)
         // - Code 143: SIGTERM
         const isFatalExit = code !== 1 && code !== 130 && code !== 143;
-        
+
         if (isFatalExit) {
           // Stop spinner and show error for fatal exits only
           if (this.spinner && this.spinner.isSpinning) {
@@ -357,24 +363,24 @@ export class DevEnvironment {
     const packageRoot = dirname(dirname(currentFile)); // Go up from dist/ to package root
     const mcpServerPath = join(packageRoot, 'mcp-server');
     this.debugLog(`MCP server path: ${mcpServerPath}`);
-    
+
     if (!existsSync(mcpServerPath)) {
       throw new Error(`MCP server directory not found at ${mcpServerPath}`);
     }
     this.debugLog('MCP server directory found');
-    
+
     // Check if MCP server dependencies are installed, install if missing
     const isGlobalInstall = mcpServerPath.includes('.pnpm');
     this.debugLog(`Is global install: ${isGlobalInstall}`);
     let nodeModulesPath = join(mcpServerPath, 'node_modules');
     let actualWorkingDir = mcpServerPath;
     this.debugLog(`Node modules path: ${nodeModulesPath}`);
-    
+
     if (isGlobalInstall) {
       const tmpDirPath = join(tmpdir(), 'dev3000-mcp-deps');
       nodeModulesPath = join(tmpDirPath, 'node_modules');
       actualWorkingDir = tmpDirPath;
-      
+
       // Update screenshot and MCP public directory to use the temp directory for global installs
       this.screenshotDir = join(actualWorkingDir, 'public', 'screenshots');
       this.mcpPublicDir = join(actualWorkingDir, 'public', 'screenshots');
@@ -382,11 +388,11 @@ export class DevEnvironment {
         mkdirSync(this.mcpPublicDir, { recursive: true });
       }
     }
-    
+
     // Always install dependencies to ensure they're up to date
     this.debugLog('Installing/updating MCP server dependencies');
     await this.installMcpServerDeps(mcpServerPath);
-    
+
     // Use version already read in constructor
 
     // For global installs, ensure all necessary files are copied to temp directory
@@ -395,18 +401,18 @@ export class DevEnvironment {
       for (const file of requiredFiles) {
         const srcPath = join(mcpServerPath, file);
         const destPath = join(actualWorkingDir, file);
-        
+
         // Check if we need to copy (source exists and destination doesn't exist or source is newer)
         if (existsSync(srcPath)) {
           let shouldCopy = !existsSync(destPath);
-          
+
           // If destination exists, check if source is newer
           if (!shouldCopy && existsSync(destPath)) {
             const srcStat = lstatSync(srcPath);
             const destStat = lstatSync(destPath);
             shouldCopy = srcStat.mtime > destStat.mtime;
           }
-          
+
           if (shouldCopy) {
             // Remove existing destination if it exists
             if (existsSync(destPath)) {
@@ -434,7 +440,7 @@ export class DevEnvironment {
     this.debugLog(`Using package manager: ${packageManagerForRun}`);
     this.debugLog(`MCP server working directory: ${actualWorkingDir}`);
     this.debugLog(`MCP server port: ${this.options.mcpPort}`);
-    
+
     this.mcpServerProcess = spawn(packageManagerForRun, ['run', 'dev'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: true,
@@ -447,13 +453,13 @@ export class DevEnvironment {
         DEV3000_VERSION: this.version, // Pass version to MCP server
       },
     });
-    
+
     this.debugLog('MCP server process spawned');
 
     // Log MCP server output to separate file for debugging
     const mcpLogFile = join(dirname(this.options.logFile), 'dev3000-mcp.log');
     writeFileSync(mcpLogFile, ''); // Clear the file
-    
+
     this.mcpServerProcess.stdout?.on('data', (data) => {
       const message = data.toString().trim();
       if (message) {
@@ -461,7 +467,7 @@ export class DevEnvironment {
         appendFileSync(mcpLogFile, `[${timestamp}] [MCP-STDOUT] ${message}\n`);
       }
     });
-    
+
     this.mcpServerProcess.stderr?.on('data', (data) => {
       const message = data.toString().trim();
       if (message) {
@@ -481,7 +487,7 @@ export class DevEnvironment {
         this.logger.log('server', `MCP server process exited with code ${code}`);
       }
     });
-    
+
     this.debugLog('MCP server event handlers setup complete');
   }
 
@@ -489,7 +495,7 @@ export class DevEnvironment {
   private async waitForServer() {
     const maxAttempts = 30;
     let attempts = 0;
-    
+
     while (attempts < maxAttempts) {
       try {
         const response = await fetch(`http://localhost:${this.options.port}`, {
@@ -502,11 +508,11 @@ export class DevEnvironment {
       } catch (error) {
         // Server not ready yet, continue waiting
       }
-      
+
       attempts++;
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    
+
     // Continue anyway if health check fails
   }
 
@@ -516,32 +522,32 @@ export class DevEnvironment {
       // For global installs, we need to install to a writable location
       // Check if this is a global install by looking for .pnpm in the path
       const isGlobalInstall = mcpServerPath.includes('.pnpm');
-      
+
       let workingDir = mcpServerPath;
       if (isGlobalInstall) {
         // Create a writable copy in temp directory for global installs
         const tmpDirPath = join(tmpdir(), 'dev3000-mcp-deps');
-        
+
         // Ensure tmp directory exists
         if (!existsSync(tmpDirPath)) {
           mkdirSync(tmpDirPath, { recursive: true });
         }
-        
+
         // Copy package.json to temp directory if it doesn't exist
         const tmpPackageJson = join(tmpDirPath, 'package.json');
         if (!existsSync(tmpPackageJson)) {
           const sourcePackageJson = join(mcpServerPath, 'package.json');
           copyFileSync(sourcePackageJson, tmpPackageJson);
         }
-        
+
         workingDir = tmpDirPath;
       }
-      
+
       const packageManager = detectPackageManagerForRun();
-      
+
       // Don't show any console output during dependency installation
       // All status will be handled by the progress bar
-      
+
       const installProcess = spawn(packageManager, ['install'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: true,
@@ -565,7 +571,7 @@ export class DevEnvironment {
 
       installProcess.on('exit', (code) => {
         clearTimeout(timeout);
-        
+
         if (code === 0) {
           resolve();
         } else {
@@ -583,7 +589,7 @@ export class DevEnvironment {
   private async waitForMcpServer() {
     const maxAttempts = 30;
     let attempts = 0;
-    
+
     while (attempts < maxAttempts) {
       try {
         // Test the actual MCP endpoint
@@ -602,11 +608,11 @@ export class DevEnvironment {
       } catch (error) {
         this.debugLog(`MCP server not ready (attempt ${attempts}): ${error}`);
       }
-      
+
       attempts++;
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    
+
     this.debugLog('MCP server health check failed, terminating');
     throw new Error(`MCP server failed to start after ${maxAttempts} seconds. Check the logs for errors.`);
   }
@@ -625,21 +631,21 @@ export class DevEnvironment {
     if (!existsSync(this.options.profileDir)) {
       mkdirSync(this.options.profileDir, { recursive: true });
     }
-    
+
     // Initialize CDP monitor with enhanced logging - use MCP public directory for screenshots
     this.cdpMonitor = new CDPMonitor(this.options.profileDir, this.mcpPublicDir, (source: string, message: string) => {
       this.logger.log('browser', message);
     }, this.options.debug);
-    
+
     try {
       // Start CDP monitoring
       await this.cdpMonitor.start();
       this.logger.log('browser', '[CDP] Chrome launched with DevTools Protocol monitoring');
-      
+
       // Navigate to the app
       await this.cdpMonitor.navigateToApp(this.options.port);
       this.logger.log('browser', `[CDP] Navigated to http://localhost:${this.options.port}`);
-      
+
     } catch (error) {
       // Log error and throw to trigger graceful shutdown
       this.logger.log('browser', `[CDP ERROR] Failed to start CDP monitoring: ${error}`);
@@ -650,14 +656,14 @@ export class DevEnvironment {
   private async gracefulShutdown() {
     if (this.isShuttingDown) return; // Prevent multiple shutdown attempts
     this.isShuttingDown = true;
-    
+
     // Stop spinner if it's running
     if (this.spinner && this.spinner.isSpinning) {
       this.spinner.fail('Critical failure detected');
     }
-    
+
     console.log(chalk.yellow('🛑 Shutting down dev3000 due to critical failure...'));
-    
+
     // Kill processes on both ports
     const killPortProcess = async (port: string, name: string) => {
       try {
@@ -675,14 +681,14 @@ export class DevEnvironment {
         console.log(chalk.gray(`⚠️ Could not kill ${name} on port ${port}`));
       }
     };
-    
+
     // Kill servers
     console.log(chalk.blue('🔄 Killing servers...'));
     await Promise.all([
       killPortProcess(this.options.port, 'your app server'),
       killPortProcess(this.options.mcpPort, 'dev3000 MCP server')
     ]);
-    
+
     // Shutdown CDP monitor
     if (this.cdpMonitor) {
       try {
@@ -693,7 +699,7 @@ export class DevEnvironment {
         console.log(chalk.gray('⚠️ CDP monitor shutdown failed'));
       }
     }
-    
+
     console.log(chalk.red('❌ Dev3000 exited due to server failure'));
     process.exit(1);
   }
@@ -703,14 +709,14 @@ export class DevEnvironment {
     process.on('SIGINT', async () => {
       if (this.isShuttingDown) return; // Prevent multiple shutdown attempts
       this.isShuttingDown = true;
-      
+
       // Stop spinner if it's running
       if (this.spinner && this.spinner.isSpinning) {
         this.spinner.fail('Interrupted');
       }
-      
+
       console.log(chalk.yellow('\n🛑 Received interrupt signal. Cleaning up processes...'));
-      
+
       // Kill processes on both ports FIRST - this is most important
       const killPortProcess = async (port: string, name: string) => {
         try {
@@ -728,14 +734,14 @@ export class DevEnvironment {
           console.log(chalk.gray(`⚠️ Could not kill ${name} on port ${port}`));
         }
       };
-      
+
       // Kill servers immediately - don't wait for browser cleanup
       console.log(chalk.blue('🔄 Killing servers...'));
       await Promise.all([
         killPortProcess(this.options.port, 'your app server'),
         killPortProcess(this.options.mcpPort, 'dev3000 MCP server')
       ]);
-      
+
       // Shutdown CDP monitor
       if (this.cdpMonitor) {
         try {
@@ -746,7 +752,7 @@ export class DevEnvironment {
           console.log(chalk.gray('⚠️ CDP monitor shutdown failed'));
         }
       }
-      
+
       console.log(chalk.green('✅ Cleanup complete'));
       process.exit(0);
     });
