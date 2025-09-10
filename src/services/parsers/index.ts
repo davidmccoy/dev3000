@@ -9,6 +9,9 @@ export {
   LogEntry,
 } from './output-processor.js';
 
-// Concrete implementations for Next.js
-export { StandardLogParser } from './log-parsers/standard.js';
-export { NextJsErrorDetector } from './error-detectors/nextjs.js';
+// Factory for creating processors with auto-detection
+export {
+  OutputProcessorFactory,
+  ProcessManagerOption,
+  FrameworkOption,
+} from './output-processor-factory.js';

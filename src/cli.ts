@@ -57,13 +57,22 @@ program
   .option("-p, --port <port>", "Development server port", "3000")
   .option("--mcp-port <port>", "MCP server port", "3684")
   .option("-s, --script <script>", "Package.json script to run (e.g. dev, build-start)", "dev")
+  .option("--server-command <command>", "Custom server command (overrides --script)")
   .option("--profile-dir <dir>", "Chrome profile directory", join(tmpdir(), "dev3000-chrome-profile"))
+  .option("--framework <framework>", "Framework for error detection (nextjs, rails, auto)", "auto")
+  .option("--process-manager <manager>", "Process manager for log parsing (standard, foreman, auto)", "auto")
   .option("--servers-only", "Run servers only, skip browser launch (use with Chrome extension)")
   .option("--debug", "Enable debug logging to console")
   .action(async (options) => {
-    // Convert script option to full command
-    const packageManager = detectPackageManager()
-    const serverCommand = `${packageManager} run ${options.script}`
+    // Use custom server command if provided, otherwise use script
+    let serverCommand: string;
+    if (options.serverCommand) {
+      serverCommand = options.serverCommand;
+    } else {
+      // Convert script option to full command
+      const packageManager = detectPackageManager();
+      serverCommand = `${packageManager} run ${options.script}`;
+    }
 
     // Detect which command name was used (dev3000 or d3k)
     const executablePath = process.argv[1]

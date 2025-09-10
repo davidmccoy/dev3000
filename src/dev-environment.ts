@@ -19,7 +19,7 @@ import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { CDPMonitor } from "./cdp-monitor.js";
-import { OutputProcessor, LogEntry, StandardLogParser, NextJsErrorDetector } from "./services/parsers/index.js";
+import { OutputProcessor, LogEntry, OutputProcessorFactory, ProcessManagerOption, FrameworkOption } from "./services/parsers/index.js";
 
 interface DevEnvironmentOptions {
   port: string;
@@ -27,6 +27,8 @@ interface DevEnvironmentOptions {
   serverCommand: string;
   profileDir: string;
   logFile: string;
+  framework?: string;
+  processManager?: string;
   debug?: boolean;
   serversOnly?: boolean;
   commandName: string;
@@ -162,9 +164,10 @@ export class DevEnvironment {
   constructor(options: DevEnvironmentOptions) {
     this.options = options;
     this.logger = new Logger(options.logFile);
-    this.outputProcessor = new OutputProcessor(
-      new StandardLogParser(),
-      new NextJsErrorDetector()
+    this.outputProcessor = OutputProcessorFactory.create(
+      options.serverCommand,
+      options.processManager as ProcessManagerOption || 'auto',
+      options.framework as FrameworkOption || 'auto'
     );
 
     // Set up MCP server public directory for web-accessible screenshots
